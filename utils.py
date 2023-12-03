@@ -32,7 +32,7 @@ def color_map(value, key=None):
     elif key == "entropy":
         # Assuming value is between 0 and log(25000)
         # Hue: 0 (red) to 120 (green) in HSV color space
-        hue = max((1 - (value / 2) * 120, 0))
+        hue = max((1 - (value / 2)) * 120, 0)
     else:
         raise ValueError("key should be 'prob' or 'entropy'")
 
