@@ -3,10 +3,10 @@ import time
 
 import gradio as gr
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, SamplingParams
 
-from utils import color_map, logprobs_from_logits, entropy_from_logits, openchat_template
+from utils import color_map, entropy_from_logits, logprobs_from_logits, openchat_template
 
 
 class VisualizeLLM:
@@ -30,7 +30,7 @@ class VisualizeLLM:
         use_beam_search_box = gr.Checkbox(label="Use beam search", value=False)
         top_k_slider = gr.Slider(minimum=0, maximum=1000, step=1, label="Top K", value=0)
         top_p_slider = gr.Slider(minimum=0, maximum=1, step=0.01, label="Top P", value=1)
-        best_of_slider = gr.Slider(minimum=1, maximum=1000, step=1, label="Best Of, for beam search", value=3)
+        best_of_slider = gr.Slider(minimum=1, maximum=1000, step=1, label="Best Of, for beam search", value=1)
         return_prompt_box = gr.Checkbox(label="Return Prompt", value=False)
 
         self.iface = gr.Interface(
@@ -48,7 +48,18 @@ class VisualizeLLM:
             outputs=[gr.HTML("Probability", show_label=True), gr.HTML("Entropy", show_label=True), gr.HTML("Stats")],
             theme="default",
             title="Visualize LLMs",
-            description=f"The color visualize the log-probabilities of the generated tokens, from red (low probability) to green (high probability). Should expect the model to generate low probability if it feels uncertain. The model used is {model_name}.",
+            description=f"""    
+            <p><b>Model name: {model_name}</b>. The color visualizes the log-probabilities of the generated tokens, from <b><span style='color:red;'>Red</span></b> (low probability) to <b><span style='color:green;'>Green</span></b> (high probability).</p>
+            <ul>
+                <li>Greedy decoding by calling <code>greedy_search()</code> if <code>best_of=1</code> and <code>use_beam_search=True</code></li>
+                <li>Contrastive search by calling <code>contrastive_search()</code> if <code>penalty_alpha>0</code> and <code>top_k>1</code></li>
+                <li>Multinomial sampling by calling <code>sample()</code> if <code>best_of=1</code> and <code>use_beam_search=False</code></li>
+                <li>Beam-search decoding by calling <code>beam_search()</code> if <code>best_of>1</code> and <code>use_beam_search=True</code></li>
+                <li>Beam-search multinomial sampling by calling <code>beam_sample()</code> if <code>best_of>1</code> and <code>use_beam_search=False</code></li>
+                <li>Diverse beam-search decoding by calling <code>group_beam_search()</code>, if <code>best_of>1</code> and <code>num_beam_groups>1</code></li>
+                <li>Constrained beam-search decoding by calling <code>constrained_beam_search()</code>, if <code>constraints!=None</code> or <code>force_words_ids!=None</code></li>
+            </ul>
+            """,
         )
 
     def get_logprob_and_entropy(self, input_ids, output_ids):
@@ -124,6 +135,7 @@ class VisualizeLLM:
                 "top_p": top_p,
                 "temperature": temperature,
                 "do_sample": not use_beam_search,
+                "num_beams": best_of if use_beam_search else 1,
                 "return_dict": True,
             }
             start = time.time()
@@ -134,9 +146,11 @@ class VisualizeLLM:
             start = time.time()
             logprobs, entropys = self.get_logprob_and_entropy(input_ids, output_ids)
             logs += f"cal logs time: {time.time() - start:.2f} s<br>"
-
             values = self.cal_stats(logprobs=logprobs, entropys=entropys)
 
+        logs += f"total logprob: {sum([math.log(v['prob']) for v in values]):.2f}, logprob/token: {sum([math.log(v['prob']) for v in values]) / len(values):.2f}<br>"
+        if values[0].get("entropy") is not None:
+            logs += f"total entropy: {sum([v['entropy'] for v in values]):.2f}, entropy/token: {sum([v['entropy'] for v in values]) / len(values):.2f}<br>"
         logs += f"num tokens: {len(values)}<br>"
         logs += f"num tokens per second: {len(values) / generate_time:.2f}<br>"
 
@@ -155,7 +169,6 @@ class VisualizeLLM:
             text = item["text"] if item["text"] != "<|new_line|>" else " <br>"
             log_info += f"{text}: "
             for i, key in enumerate(keys):
-                print(key, item[key])
                 background_color = color_map(item[key], key)
                 colored_text[i] += f"<span style='background-color: {background_color}; padding: 0px;'>{text}</span>"
                 log_info += f"{key}: <span style='background-color: {background_color}; padding: 0px;'>{item[key]:.2f}</span>, "
