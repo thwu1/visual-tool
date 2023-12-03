@@ -5,13 +5,16 @@ import gradio as gr
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import LLM, SamplingParams
-
+import gc
 from utils import color_map, entropy_from_logits, logprobs_from_logits, openchat_template
+from dataclasses import dataclass
+import tyro
 
 
 class VisualizeLLM:
     def __init__(self, model_name, extra_generate_kwargs, chat_template, use_vllm=False, use_flash_attention_2=False) -> None:
         self.use_vllm = use_vllm
+        self.use_flash_attention_2 = use_flash_attention_2
         if use_vllm:
             self.llm = LLM(model_name)
         else:
@@ -25,16 +28,16 @@ class VisualizeLLM:
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.chat_template = chat_template
 
-        max_new_token_slider = gr.Slider(minimum=1, maximum=8192, step=1, label="Max New Tokens", value=256)
-        temperature_slider = gr.Slider(minimum=0.0, maximum=1.5, step=0.01, label="Temperature", value=0.5)
+        max_new_token_slider = gr.Slider(minimum=1, maximum=4096, step=1, label="Max New Tokens", value=256)
+        temperature_slider = gr.Slider(minimum=0.01, maximum=1.5, step=0.01, label="Temperature", value=0.5)
         use_beam_search_box = gr.Checkbox(label="Use beam search", value=False)
         top_k_slider = gr.Slider(minimum=0, maximum=1000, step=1, label="Top K", value=0)
         top_p_slider = gr.Slider(minimum=0, maximum=1, step=0.01, label="Top P", value=1)
-        best_of_slider = gr.Slider(minimum=1, maximum=1000, step=1, label="Best Of, for beam search", value=1)
+        best_of_slider = gr.Slider(minimum=1, maximum=100, step=1, label="Best Of, for beam search", value=1)
         return_prompt_box = gr.Checkbox(label="Return Prompt", value=False)
 
         self.iface = gr.Interface(
-            fn=lambda *args: self.to_html_str(*self.gen_and_cal_prob(*args)),
+            fn=self.fn,
             inputs=[
                 "text",
                 max_new_token_slider,
@@ -62,13 +65,34 @@ class VisualizeLLM:
             """,
         )
 
+    def fn(self, *args):
+        try:
+            return self.to_html_str(*self.gen_and_cal_prob(*args))
+        except:
+            print("OOM, Restarting")
+            self.llm.to("cpu")
+            del self.llm
+            gc.collect()
+            torch.cuda.empty_cache()
+            gc.collect()
+            self._restart()
+            return None, None, "OOM, Restarted"
+
+    def _restart(self):
+        if self.use_vllm:
+            self.llm = LLM(model_name)
+        else:
+            self.llm = AutoModelForCausalLM.from_pretrained(
+                model_name, use_flash_attention_2=self.use_flash_attention_2, torch_dtype=torch.bfloat16
+            ).to("cuda")
+
     def get_logprob_and_entropy(self, input_ids, output_ids):
         """
         input_ids: [batch_size, seq_len]
         output_ids: [batch_size, seq_len]
         return: [{token_id: logprob}, ...]"""
+
         num_gen_tokens = output_ids.shape[-1] - input_ids.shape[-1]
-        # print(num_gen_tokens)
         assert torch.eq(output_ids[0][: input_ids.shape[-1]], input_ids[0]).all()
         input_kwargs = {
             "input_ids": output_ids,
@@ -179,9 +203,17 @@ class VisualizeLLM:
         self.iface.launch(share=True)
 
 
-if __name__ == "__main__":
-    model_name = "openchat/openchat_3.5"
-    # model_name = "lvwerra/gpt2-imdb"
-    extra_generate_kwargs = {}
-    server = VisualizeLLM(model_name, extra_generate_kwargs, openchat_template)
-    server.run()
+@dataclass
+class ScriptArguments:
+    model_name: str = "openchat/openchat_3.5"
+
+
+args = tyro.cli(ScriptArguments)
+
+
+# model_name = "openchat/openchat_3.5"
+# model_name = "lvwerra/gpt2-imdb"
+model_name = "berkeley-nest/Starling-LM-7B-alpha"
+extra_generate_kwargs = {}
+server = VisualizeLLM(model_name, extra_generate_kwargs, openchat_template)
+server.run()
