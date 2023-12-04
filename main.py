@@ -246,6 +246,6 @@ args = tyro.cli(ScriptArguments)
 # model_name = "berkeley-nest/Starling-LM-7B-alpha"
 extra_generate_kwargs = {}
 server = VisualizeLLM(
-    args.model_name, args.ref_model_name, extra_generate_kwargs, openchat_template, args.use_vllm, args.use_flash_attention_2, args.low_cpu_mem_usage
+    args.model_name, args.ref_model_name, extra_generate_kwargs, openchat_template, args.use_flash_attention_2, args.low_cpu_mem_usage
 )
 server.run()
