@@ -4,7 +4,7 @@ import time
 import gradio as gr
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from vllm import LLM, SamplingParams
+
 import gc
 from utils import color_map, entropy_from_logits, logprobs_from_logits, openchat_template
 from dataclasses import dataclass
@@ -13,12 +13,9 @@ from typing import Optional
 
 
 class VisualizeLLM:
-    def __init__(
-        self, model_name, ref_model_name, extra_generate_kwargs, chat_template, use_vllm=False, use_flash_attention_2=False, low_cpu_mem_usage=True
-    ) -> None:
+    def __init__(self, model_name, ref_model_name, extra_generate_kwargs, chat_template, use_flash_attention_2=False, low_cpu_mem_usage=True) -> None:
         self.model_name = model_name
         self.ref_model_name = ref_model_name
-        self.use_vllm = use_vllm
         self.use_flash_attention_2 = use_flash_attention_2
         self.low_cpu_mem_usage = low_cpu_mem_usage
         self._restart()  # initialize self.llm and self.ref_llm
@@ -68,14 +65,7 @@ class VisualizeLLM:
         )
 
     def fn(self, *args):
-        # try:
         return self.to_html_str(*self.gen_and_cal_prob(*args))
-
-    # except:
-    #     print("OOM, Restarting")
-    #     self._clean_up()
-    #     self._restart()
-    #     return None, "OOM, Restarted"
 
     def _clean_up(self):
         self.llm.to("cpu")
@@ -173,48 +163,30 @@ class VisualizeLLM:
         logs = "<b>Stats:</b><br>"
         input_text = [self.chat_template(text)]
         input_ids = self.tokenizer(input_text)["input_ids"]
-        if self.use_vllm:
-            sampling_params = SamplingParams(
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k if top_k > 0 else -1,
-                max_tokens=max_new_tokens,
-                use_beam_search=use_beam_search,
-                logprobs=1,
-                stop_token_ids=[self.tokenizer.eos_token_id],
-                best_of=best_of,
-                skip_special_tokens=False,
-            )
 
-            start = time.time()
-            outputs = self.llm.generate(prompt_token_ids=input_ids, sampling_params=sampling_params)[0].outputs[0]
-            generate_time = time.time() - start
-            logs += f"generate time: {generate_time:.2f} s<br>"
-            values = self.cal_stats(outputs.logprobs)
-        else:
-            input_ids = torch.tensor(input_ids).to("cuda")
-            input_kwargs = {
-                "input_ids": input_ids.to("cuda"),
-                "attention_mask": torch.ones_like(input_ids).to("cuda"),
-                "max_new_tokens": max_new_tokens,
-                "top_k": top_k,
-                "top_p": top_p,
-                "temperature": temperature,
-                "do_sample": not use_beam_search,
-                "num_beams": best_of if use_beam_search else 1,
-                "return_dict": True,
-            }
-            start = time.time()
-            output_ids = self.llm.generate(**input_kwargs)
-            generate_time = time.time() - start
-            logs += f"generate time: {generate_time:.2f} s<br>"
+        input_ids = torch.tensor(input_ids).to("cuda")
+        input_kwargs = {
+            "input_ids": input_ids.to("cuda"),
+            "attention_mask": torch.ones_like(input_ids).to("cuda"),
+            "max_new_tokens": max_new_tokens,
+            "top_k": top_k,
+            "top_p": top_p,
+            "temperature": temperature,
+            "do_sample": not use_beam_search,
+            "num_beams": best_of if use_beam_search else 1,
+            "return_dict": True,
+        }
+        start = time.time()
+        output_ids = self.llm.generate(**input_kwargs)
+        generate_time = time.time() - start
+        logs += f"generate time: {generate_time:.2f} s<br>"
 
-            start = time.time()
-            values_ls = self.get_logprob_and_entropy(self.llm, input_ids, output_ids)
-            ref_values_ls = None
+        start = time.time()
+        values_ls = self.get_logprob_and_entropy(self.llm, input_ids, output_ids)
+        ref_values_ls = None
 
-            if self.ref_model_name is not None:
-                ref_values_ls = self.get_logprob_and_entropy(self.ref_llm, input_ids, output_ids)
+        if self.ref_model_name is not None:
+            ref_values_ls = self.get_logprob_and_entropy(self.ref_llm, input_ids, output_ids)
 
         logs += f"cal logs time: {time.time() - start:.2f} s<br>"
         values = self.cal_stats(values_ls, ref_values_ls)
@@ -261,7 +233,6 @@ class VisualizeLLM:
 @dataclass
 class ScriptArguments:
     model_name: str = "openchat/openchat_3.5"
-    use_vllm: bool = False
     use_flash_attention_2: bool = False
     ref_model_name: Optional[str] = None
     low_cpu_mem_usage: bool = True
