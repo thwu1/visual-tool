@@ -13,11 +13,14 @@ from typing import Optional
 
 
 class VisualizeLLM:
-    def __init__(self, model_name, ref_model_name, extra_generate_kwargs, chat_template, use_vllm=False, use_flash_attention_2=False) -> None:
+    def __init__(
+        self, model_name, ref_model_name, extra_generate_kwargs, chat_template, use_vllm=False, use_flash_attention_2=False, low_cpu_mem_usage=True
+    ) -> None:
         self.model_name = model_name
         self.ref_model_name = ref_model_name
         self.use_vllm = use_vllm
         self.use_flash_attention_2 = use_flash_attention_2
+        self.low_cpu_mem_usage = low_cpu_mem_usage
         self._restart()  # initialize self.llm and self.ref_llm
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -88,31 +91,38 @@ class VisualizeLLM:
             gc.collect()
 
     def _restart(self):
-        if self.use_vllm:
-            self.llm = LLM(self.model_name)
-        else:
-            self.llm = (
-                AutoModelForCausalLM.from_pretrained(self.model_name, use_flash_attention_2=self.use_flash_attention_2, torch_dtype=torch.bfloat16)
+        self.llm = (
+            AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                use_flash_attention_2=self.use_flash_attention_2,
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=self.low_cpu_mem_usage,
+                device_map="cuda",
+            )
+            .eval()
+            .requires_grad_(False)
+        )
+        if self.ref_model_name is not None:
+            self.ref_llm = (
+                AutoModelForCausalLM.from_pretrained(
+                    self.ref_model_name,
+                    use_flash_attention_2=self.use_flash_attention_2,
+                    torch_dtype=torch.bfloat16,
+                    low_cpu_mem_usage=self.low_cpu_mem_usage,
+                    device_map="cuda",
+                )
                 .eval()
-                .to("cuda")
                 .requires_grad_(False)
             )
-            if self.ref_model_name is not None:
-                self.ref_llm = (
-                    AutoModelForCausalLM.from_pretrained(
-                        self.ref_model_name, use_flash_attention_2=self.use_flash_attention_2, torch_dtype=torch.bfloat16
-                    )
-                    .eval()
-                    .to("cuda")
-                    .requires_grad_(False)
-                )
 
     def get_logprob_and_entropy(self, llm, input_ids, output_ids):
         """
+        Input:
         input_ids: [batch_size, seq_len]
         output_ids: [batch_size, seq_len]
-        return:
-        values_ls: [{token_id: logprob}, ...]"""
+
+        Return:
+        values_ls: [{"token_id": token_id, "logprob": logprob}, ...]"""
 
         num_gen_tokens = output_ids.shape[-1] - input_ids.shape[-1]
         assert torch.eq(output_ids[0][: input_ids.shape[-1]], input_ids[0]).all()
@@ -206,9 +216,8 @@ class VisualizeLLM:
             if self.ref_model_name is not None:
                 ref_values_ls = self.get_logprob_and_entropy(self.ref_llm, input_ids, output_ids)
 
-            logs += f"cal logs time: {time.time() - start:.2f} s<br>"
-            values = self.cal_stats(values_ls, ref_values_ls)
-            # print(values)
+        logs += f"cal logs time: {time.time() - start:.2f} s<br>"
+        values = self.cal_stats(values_ls, ref_values_ls)
 
         logs += f"total logprob: {sum([math.log(v['prob']) for v in values]):.2f}, logprob/token: {sum([math.log(v['prob']) for v in values]) / len(values):.2f}<br>"
         if values[0].get("entropy") is not None:
@@ -226,7 +235,7 @@ class VisualizeLLM:
         return logs, values
 
     def to_html_str(self, logs: str, values) -> [str, str]:
-        """values is a list of dictionaries like [{'text': 'Hello', 'prob': 0.5, 'entropy'}, ...]"""
+        """values is a list of dictionaries [{'text': 'Hello', 'prob': 0.5, 'entropy'}, ...]"""
         keys_map = {"diff_entropy": 1, "diff_logprob": 2, "diff_prob": 3, "entropy": 4, "ref_entropy": 5, "prob": 6, "ref_prob": 7}  # set the order
         keys_unorder = [key for key in values[0].keys() if key != "text"]
         keys = sorted(keys_unorder, key=lambda x: keys_map.get(x, 0))
@@ -255,6 +264,7 @@ class ScriptArguments:
     use_vllm: bool = False
     use_flash_attention_2: bool = False
     ref_model_name: Optional[str] = None
+    low_cpu_mem_usage: bool = True
 
 
 args = tyro.cli(ScriptArguments)
@@ -264,5 +274,7 @@ args = tyro.cli(ScriptArguments)
 # model_name = "lvwerra/gpt2-imdb"
 # model_name = "berkeley-nest/Starling-LM-7B-alpha"
 extra_generate_kwargs = {}
-server = VisualizeLLM(args.model_name, args.ref_model_name, extra_generate_kwargs, openchat_template, args.use_vllm, args.use_flash_attention_2)
+server = VisualizeLLM(
+    args.model_name, args.ref_model_name, extra_generate_kwargs, openchat_template, args.use_vllm, args.use_flash_attention_2, args.low_cpu_mem_usage
+)
 server.run()
