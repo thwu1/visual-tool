@@ -24,24 +24,50 @@ def entropy_from_logits(logits):
     return entropy
 
 
-def color_map(value, key=None):
-    if key == "prob":
-        # Assuming value is between 0 and 1
-        # Hue: 0 (red) to 120 (green) in HSV color space
-        hue = value * 120  # Green to Red
-    elif key == "entropy":
-        # Assuming value is between 0 and log(25000)
-        # Hue: 0 (red) to 120 (green) in HSV color space
-        hue = max((1 - (value / 2)) * 120, 0)
-    else:
-        raise ValueError("key should be 'prob' or 'entropy'")
-
+def color_map(value, key: str):
     saturation = 0.5  # Full saturation
     brightness = 1  # Full brightness
+
+    if key.startswith("diff"):
+        normalized_value = 1 / (1 + math.exp(-value))
+        if key.endswith("logprob") or key.endswith("entropy") or key.endswith("prob"):
+            hue, saturation, brightness = blue_to_white_to_red(normalized_value)
+        else:
+            raise ValueError("key should ends with 'logprob' or 'prob 'or 'entropy'")
+    else:
+        if key.endswith("prob"):
+            # Assuming value is between 0 and 1
+            hue = value * 120  # Green to Red
+        elif key.endswith("entropy"):
+            # Assuming value is between 0 and log(25000)
+            hue = max((1 - (value / 2)) * 120, 0)
+        else:
+            raise ValueError("key should ends with 'prob' or 'entropy'")
 
     # Convert HSV to RGB
     r, g, b = colorsys.hsv_to_rgb(hue / 360, saturation, brightness)
     return f"rgb({int(r * 255)}, {int(g * 255)}, {int(b * 255)})"
+
+
+def blue_to_white_to_red(transition):
+    """
+    Calculate RGB values for a transition from blue to white to red.
+
+    :param transition: A float between 0 and 1, where 0 is blue, 0.5 is white, and 1 is red.
+    :return: A tuple (r, g, b) representing the RGB values.
+    """
+    saturation = 1
+    brightness = 1  # Full brightness
+
+    if transition <= 0.5:
+        # From blue (240 degrees) to white
+        hue = 240  # Blue
+        saturation = (0.5-transition) * 2  # Decrease saturation to 0 at the midpoint (white)
+    else:
+        # From white to red (0 degrees)
+        hue = 0  # Red
+        saturation = (transition - 0.5) * 2  # Increase saturation from 0 to 1
+    return hue, saturation, brightness
 
 
 def openchat_template(text: str) -> str:
